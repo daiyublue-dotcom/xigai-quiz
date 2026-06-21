@@ -198,30 +198,59 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 </div>
 
 <script>
-// --- Robust Parser ---
+// --- Multi-format Parser ---
 var QUESTIONS = [];
 var currentChapterName = '默认章节';
 
+function normalizeText(text) {
+  // Join fragmented lines: mammoth splits formatted text into separate paragraphs
+  var lines = text.split(/\n/);
+  var out = [], buf = '';
+  for (var i = 0; i < lines.length; i++) {
+    var ln = lines[i].trim();
+    if (!ln) { if (buf) { out.push(buf); buf = ''; } continue; }
+
+    // If this line and the buffer could be parts of the same logical line
+    // (short Chinese fragments, numbers, single letters with dots)
+    var shortFrag = /^(\d{1,3}|[A-E]|[第题选项正确率答案单多选判断]|[\.、\)．]\s*.+|[一-鿿]{1,6})$/.test(ln);
+    var bufShort = buf.length < 30 && !/\n/.test(buf);
+
+    if (shortFrag && bufShort) {
+      buf += (buf ? ' ' : '') + ln;
+    } else {
+      if (buf) { out.push(buf); }
+      buf = ln;
+    }
+  }
+  if (buf) out.push(buf);
+  return out.join('\n');
+}
+
 function parseQuestions(text) {
+  text = normalizeText(text);
+
+  // Detect format
+  if (/第\s*\d+\s*题/.test(text) && /正确率/.test(text)) {
+    return parseSurveyFormat(text);
+  }
+  return parseStandardFormat(text);
+}
+
+// Format 1: Standard exam (1. stem A. opt 答案：X)
+function parseStandardFormat(text) {
   var questions = [];
-  // Normalize: unify Chinese/English punctuation in answers & options
   text = text.replace(/答案[：:]/g, '答案：');
   var lines = text.split(/\n/).map(function(l){return l.trim()}).filter(function(l){return l.length>0});
-
   var chapterPattern = /^(第[一二三四五六七八九十百]+章|导论|绪论|前言)/;
   var questionStart = /^(\d+)[\.、\)]\s*(.*)/;
 
   var i = 0;
   while (i < lines.length) {
     var line = lines[i];
-
-    // Chapter header
     if (chapterPattern.test(line)) {
       currentChapterName = line.replace(/\s+/g, '').substring(0, 20);
       i++; continue;
     }
-
-    // Question start
     var qMatch = line.match(questionStart);
     if (!qMatch) { i++; continue; }
 
@@ -230,63 +259,127 @@ function parseQuestions(text) {
     var answer = '';
     i++;
 
-    // Collect content until next question or EOF
     while (i < lines.length) {
       var ln = lines[i];
-
-      // Stop at next question or chapter
       if (questionStart.test(ln) || chapterPattern.test(ln)) break;
 
-      // --- Try to extract answer (anywhere in line) ---
       var ansIdx = ln.indexOf('答案：');
       if (ansIdx >= 0) {
-        var ansPart = ln.substring(ansIdx + 3).trim().replace(/\s+/g, '');
-        // Remove trailing punctuation
-        ansPart = ansPart.replace(/[。，,\.]$/, '');
-        answer = ansPart;
-        // The part before 答案 might contain an option
-        var beforeAns = ln.substring(0, ansIdx).trim();
-        if (beforeAns) {
-          var opts = extractOptions(beforeAns);
-          for (var k in opts) { if (!options[k]) options[k] = opts[k]; }
-        }
+        answer = ln.substring(ansIdx + 3).trim().replace(/\s+/g, '').replace(/[。，,\.]$/, '');
+        var before = ln.substring(0, ansIdx).trim();
+        if (before) { var o = extractOptions(before); for (var k in o) { if (!options[k]) options[k] = o[k]; } }
         i++; break;
       }
 
-      // --- Try to extract options from this line ---
-      var opts = extractOptions(ln);
-      if (Object.keys(opts).length > 0) {
-        for (var k in opts) { if (!options[k]) options[k] = opts[k]; }
-        i++; continue;
-      }
+      var o = extractOptions(ln);
+      if (Object.keys(o).length > 0) { for (var k in o) { if (!options[k]) options[k] = o[k]; } i++; continue; }
 
-      // --- Check if this is a standalone answer (no 答案：prefix) ---
-      var standaloneAns = ln.match(/^([A-E]{1,5}|正确|错误)$/);
-      if (standaloneAns && Object.keys(options).length > 0) {
-        answer = standaloneAns[1];
-        i++; break;
-      }
+      var sa = ln.match(/^([A-E]{1,5}|正确|错误)$/);
+      if (sa && Object.keys(options).length > 0) { answer = sa[1]; i++; break; }
 
-      // --- Continuation of stem ---
       stem += ln;
       i++;
     }
 
-    // Post-process: if answer looks like a multi-letter code, split it
-    if (answer && /^[A-E]{2,}$/.test(answer)) {
-      answer = answer.split('');
+    if (answer && /^[A-E]{2,}$/.test(answer)) answer = answer.split('');
+    var type = 'single';
+    if (answer === '正确' || answer === '错误') { type = 'truefalse'; if (Object.keys(options).length === 0) options = {'正确':'正确','错误':'错误'}; }
+    else if (Array.isArray(answer)) type = 'multi';
+
+    if (stem && Object.keys(options).length >= 1 && answer) {
+      questions.push({id: questions.length+1, type: type, chapter: currentChapterName, stem: stem, options: options, answer: answer});
+    }
+  }
+  return questions;
+}
+
+// Format 2: Survey export (第N题 stem [单选题] 选项 A. opt 小计 比例 正确率：XX%)
+function parseSurveyFormat(text) {
+  var questions = [];
+  // Split by 第 N 题 (may have spaces from mammoth)
+  text = text.replace(/第\s+(\d+)\s+题/g, '第$1题');
+  var blocks = text.split(/第(\d+)题/);
+  // blocks[0] = before first question, blocks[1] = num, blocks[2] = content, blocks[3] = num, blocks[4] = content, ...
+
+  for (var b = 0; b < blocks.length; b++) {
+    // Find question number + content pairs
+    if (!/^\d+$/.test(blocks[b])) continue;
+    var qnum = parseInt(blocks[b]);
+    var content = blocks[b+1] || '';
+    b++; // skip content
+
+    // Extract stem: everything before 选项 or [单选题]/[多选题]
+    var stem = '';
+    var typeTag = '';
+    var typeMatch = content.match(/\[(单选题|多选题|判断题)\]/);
+    if (typeMatch) {
+      typeTag = typeMatch[1];
+      var idx = content.indexOf(typeMatch[0]);
+      stem = content.substring(0, idx).trim();
+      content = content.substring(idx + typeMatch[0].length);
     }
 
-    // Determine type
-    var type = 'single';
-    if (answer === '正确' || answer === '错误') {
-      type = 'truefalse';
-      if (Object.keys(options).length === 0) {
-        options = {'正确': '正确', '错误': '错误'};
+    // If no type tag, stem is before 选项
+    if (!stem) {
+      var optIdx = content.indexOf('选项');
+      if (optIdx >= 0) {
+        stem = content.substring(0, optIdx).trim();
+        content = content.substring(optIdx);
+      } else {
+        stem = content.split(/\n/)[0] || '';
       }
-    } else if (Array.isArray(answer)) {
-      type = 'multi';
     }
+
+    // Clean stem: remove leading numbers, spaces, newlines
+    stem = stem.replace(/^[\d\.\s、]+/, '').replace(/\n/g, ' ').replace(/\s+/g, ' ').trim();
+
+    // Extract options: look for A. xxx pattern
+    var options = {};
+    var optRe = /([A-E])[\.、\)．]\s*([^\n]+)/g;
+    var optMatch;
+    while ((optMatch = optRe.exec(content)) !== null) {
+      var letter = optMatch[1];
+      var optText = optMatch[2].trim();
+      // Remove statistics numbers at the end
+      optText = optText.replace(/\s+\d+[\d\.]*\s*\d*\.?\d*%\s*$/, '').trim();
+      if (optText) options[letter] = optText;
+    }
+
+    // Extract answer: find the option with the highest count percentage
+    var answer = '';
+    var correctRateMatch = content.match(/正确率[：:]\s*([\d\.]+)%/);
+    if (correctRateMatch) {
+      var rate = parseFloat(correctRateMatch[1]);
+      // Find option whose percentage most closely matches the correct rate
+      var bestLetter = '';
+      var bestDiff = 999;
+      var pctRe = /([A-E])[\.、\)．][^\n]*?(\d+)\s+([\d\.]+)%/g;
+      var pctMatch;
+      while ((pctMatch = pctRe.exec(content)) !== null) {
+        var lt = pctMatch[1];
+        var pct = parseFloat(pctMatch[3]);
+        var diff = Math.abs(pct - rate);
+        if (diff < bestDiff) { bestDiff = diff; bestLetter = lt; }
+      }
+      if (bestLetter) answer = bestLetter;
+    }
+
+    if (!answer && Object.keys(options).length > 0) {
+      // Fallback: find option with highest count
+      var maxCount = 0, maxLetter = '';
+      var cntRe = /([A-E])[\.、\)．][^\n]*?\s+(\d+)\s+[\d\.]+%/g;
+      var cntMatch;
+      while ((cntMatch = cntRe.exec(content)) !== null) {
+        var lt2 = cntMatch[1];
+        var cnt = parseInt(cntMatch[2]);
+        if (cnt > maxCount) { maxCount = cnt; maxLetter = lt2; }
+      }
+      if (maxLetter) answer = maxLetter;
+    }
+
+    var type = 'single';
+    if (typeTag === '多选题') type = 'multi';
+    if (typeTag === '判断题') type = 'truefalse';
 
     if (stem && Object.keys(options).length >= 1 && answer) {
       questions.push({
@@ -303,16 +396,14 @@ function parseQuestions(text) {
   return questions;
 }
 
-// Extract A. xxx B. xxx etc from a string (handles inline options)
+// Shared: extract A. xxx B. xxx from a line
 function extractOptions(str) {
   var result = {};
-  // Match patterns like "A. xxx" "B、xxx" "C) xxx" "D．xxx"
   var re = /([A-E])[\.、\)．]\s*([^A-E]+?)(?=\s*[A-E][\.、\)．]|$)/g;
-  var match;
-  while ((match = re.exec(str)) !== null) {
-    var letter = match[1];
-    var text = match[2].trim();
-    if (text) result[letter] = text;
+  var m;
+  while ((m = re.exec(str)) !== null) {
+    var lt = m[1], tx = m[2].trim();
+    if (tx) result[lt] = tx;
   }
   return result;
 }
