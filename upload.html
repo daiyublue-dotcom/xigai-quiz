@@ -173,6 +173,7 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
       </div>
       <button onclick="resetUpload()" style="margin-left:auto">重新上传</button>
       <button onclick="resetAll()">重置进度</button>
+      <button onclick="toggleDebug()" style="font-size:.7rem">调试</button>
     </div>
     <div class="summary-bar" id="summaryBar"></div>
     <div id="questionList"></div>
@@ -187,6 +188,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 </button>
 <div class="badge-contact">有问题联系作者 wx:FishloveStar4ever</div>
 
+<div id="debugPanel" style="display:none;position:fixed;top:0;right:0;width:420px;height:100vh;background:var(--card);box-shadow:-4px 0 32px rgba(0,0,0,.07);z-index:210;overflow-y:auto;border-left:1px solid var(--border);padding:20px"></div>
+
 <div class="wrong-panel" id="wrongPanel">
   <div class="wrong-panel-inner">
     <div class="wrong-panel-header"><h3>错题本</h3><button onclick="toggleWrongPanel()">&times;</button></div>
@@ -195,30 +198,31 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 </div>
 
 <script>
-// --- Parser ---
+// --- Robust Parser ---
 var QUESTIONS = [];
 var currentChapterName = '默认章节';
 
 function parseQuestions(text) {
   var questions = [];
+  // Normalize: unify Chinese/English punctuation in answers & options
+  text = text.replace(/答案[：:]/g, '答案：');
   var lines = text.split(/\n/).map(function(l){return l.trim()}).filter(function(l){return l.length>0});
 
-  // Detect chapter headers: 第X章 or 导论 etc.
-  var chapterPattern = /^(第[一二三四五六七八九十百]+章|导论|绪论|前言).*/;
+  var chapterPattern = /^(第[一二三四五六七八九十百]+章|导论|绪论|前言)/;
+  var questionStart = /^(\d+)[\.、\)]\s*(.*)/;
 
   var i = 0;
   while (i < lines.length) {
     var line = lines[i];
 
-    // Skip chapter headers (they become the current chapter)
+    // Chapter header
     if (chapterPattern.test(line)) {
-      currentChapterName = line.replace(/\s+/g, '').substring(0, 15);
-      i++;
-      continue;
+      currentChapterName = line.replace(/\s+/g, '').substring(0, 20);
+      i++; continue;
     }
 
-    // Detect question start: number followed by . or 、 or )
-    var qMatch = line.match(/^(\d+)[\.、\)]\s*(.*)/);
+    // Question start
+    var qMatch = line.match(questionStart);
     if (!qMatch) { i++; continue; }
 
     var stem = qMatch[2].trim();
@@ -226,67 +230,91 @@ function parseQuestions(text) {
     var answer = '';
     i++;
 
-    // Collect options (A. B. C. etc) and answer line
+    // Collect content until next question or EOF
     while (i < lines.length) {
-      var optLine = lines[i];
+      var ln = lines[i];
 
-      // Check for answer line
-      var ansMatch = optLine.match(/^答案[：:]\s*(.+)/);
-      if (ansMatch) {
-        answer = ansMatch[1].trim().replace(/\s+/g, '');
-        i++;
-        break;
+      // Stop at next question or chapter
+      if (questionStart.test(ln) || chapterPattern.test(ln)) break;
+
+      // --- Try to extract answer (anywhere in line) ---
+      var ansIdx = ln.indexOf('答案：');
+      if (ansIdx >= 0) {
+        var ansPart = ln.substring(ansIdx + 3).trim().replace(/\s+/g, '');
+        // Remove trailing punctuation
+        ansPart = ansPart.replace(/[。，,\.]$/, '');
+        answer = ansPart;
+        // The part before 答案 might contain an option
+        var beforeAns = ln.substring(0, ansIdx).trim();
+        if (beforeAns) {
+          var opts = extractOptions(beforeAns);
+          for (var k in opts) { if (!options[k]) options[k] = opts[k]; }
+        }
+        i++; break;
       }
 
-      // Check if next question starts
-      if (/^\d+[\.、\)]/.test(optLine)) break;
-      // Check if chapter header
-      if (chapterPattern.test(optLine)) break;
-
-      // Check for option: A. or A、 text
-      var optMatch = optLine.match(/^([A-E])[\.、\)]\s*(.+)/);
-      if (optMatch) {
-        options[optMatch[1]] = optMatch[2].trim();
-        i++;
-        continue;
+      // --- Try to extract options from this line ---
+      var opts = extractOptions(ln);
+      if (Object.keys(opts).length > 0) {
+        for (var k in opts) { if (!options[k]) options[k] = opts[k]; }
+        i++; continue;
       }
 
-      // Continuation of stem (multi-line)
-      stem += optLine;
+      // --- Check if this is a standalone answer (no 答案：prefix) ---
+      var standaloneAns = ln.match(/^([A-E]{1,5}|正确|错误)$/);
+      if (standaloneAns && Object.keys(options).length > 0) {
+        answer = standaloneAns[1];
+        i++; break;
+      }
+
+      // --- Continuation of stem ---
+      stem += ln;
       i++;
     }
 
-    if (stem && Object.keys(options).length >= 2 && answer) {
-      var type = 'single';
-      var finalAnswer = answer;
+    // Post-process: if answer looks like a multi-letter code, split it
+    if (answer && /^[A-E]{2,}$/.test(answer)) {
+      answer = answer.split('');
+    }
 
-      // Detect type
-      if (answer === '正确' || answer === '错误') {
-        type = 'truefalse';
-        finalAnswer = answer;
-        // For true/false, ensure we have 正确/错误 options
-        if (!options['正确'] && !options['错误']) {
-          options = {'正确': '正确', '错误': '错误'};
-        }
-      } else if (/^[A-E]{2,}$/.test(answer)) {
-        type = 'multi';
-        finalAnswer = answer.split('');
-      } else if (/^[A-E]$/.test(answer)) {
-        type = 'single';
+    // Determine type
+    var type = 'single';
+    if (answer === '正确' || answer === '错误') {
+      type = 'truefalse';
+      if (Object.keys(options).length === 0) {
+        options = {'正确': '正确', '错误': '错误'};
       }
+    } else if (Array.isArray(answer)) {
+      type = 'multi';
+    }
 
+    if (stem && Object.keys(options).length >= 1 && answer) {
       questions.push({
         id: questions.length + 1,
         type: type,
         chapter: currentChapterName,
         stem: stem,
         options: options,
-        answer: finalAnswer
+        answer: answer
       });
     }
   }
 
   return questions;
+}
+
+// Extract A. xxx B. xxx etc from a string (handles inline options)
+function extractOptions(str) {
+  var result = {};
+  // Match patterns like "A. xxx" "B、xxx" "C) xxx" "D．xxx"
+  var re = /([A-E])[\.、\)．]\s*([^A-E]+?)(?=\s*[A-E][\.、\)．]|$)/g;
+  var match;
+  while ((match = re.exec(str)) !== null) {
+    var letter = match[1];
+    var text = match[2].trim();
+    if (text) result[letter] = text;
+  }
+  return result;
 }
 
 // --- File handler ---
@@ -631,6 +659,92 @@ function initQuiz() {
   loadState();loadWrongBook();
   renderSidebar();renderChapterSelect();renderAll();updateStats();
 }
+
+// --- Debug ---
+var _rawText = '';
+function toggleDebug() {
+  var panel = document.getElementById('debugPanel');
+  if (panel.style.display === 'block') { panel.style.display = 'none'; return; }
+  if (!_rawText) {
+    panel.innerHTML = '<div style="padding:20px;color:var(--faint)">暂无解析数据（重新上传以生成）</div>';
+  } else {
+    var chs = getChapters();
+    var h = '<div style="font-size:.8rem;line-height:1.6;padding:16px">';
+    h += '<strong>解析到 ' + QUESTIONS.length + ' 道题，' + chs.length + ' 个章节</strong><br><br>';
+    for (var c = 0; c < chs.length; c++) {
+      var chQs = QUESTIONS.filter(function(q){return q.chapter===chs[c]});
+      h += '<strong>' + esc(chs[c]) + '</strong> (' + chQs.length + '题)<br>';
+      for (var q = 0; q < Math.min(5, chQs.length); q++) {
+        var qq = chQs[q];
+        h += '&nbsp;&nbsp;#' + qq.id + ' [' + typeLabels[qq.type] + '] ' + esc(qq.stem).substring(0,40) + '... 答案:' + (Array.isArray(qq.answer)?qq.answer.join(''):qq.answer) + '<br>';
+      }
+      if (chQs.length > 5) h += '&nbsp;&nbsp;... 还有 ' + (chQs.length-5) + ' 题<br>';
+    }
+    h += '</div>';
+    panel.innerHTML = h;
+  }
+  panel.style.display = 'block';
+}
+
+window._rawText = _rawText;
+// Hook into handleFile to capture raw text
+var _origHandleFile = handleFile;
+handleFile = function(file) {
+  var origOnLoad = FileReader.prototype.onload;
+  var reader = new FileReader();
+  var _origReadAsArrayBuffer = reader.readAsArrayBuffer;
+  // Just wrap the mammoth call
+  _origHandleFile(file);
+  // We need to intercept mammoth result — let's just store it in the status callback
+};
+
+// Better approach: intercept in the mammoth promise chain
+var _origHandleFile2 = handleFile;
+handleFile = function(file) {
+  if (!file) return;
+  var status = document.getElementById('uploadStatus');
+  status.innerHTML = '<span class="spinner"></span>正在解析文档...';
+  status.className = 'upload-status';
+
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    mammoth.extractRawText({arrayBuffer: e.target.result})
+      .then(function(result) {
+        _rawText = result.value;
+        currentChapterName = '默认章节';
+        var parsed = parseQuestions(result.value);
+
+        if (parsed.length === 0) {
+          status.innerHTML = '未识别到题目。点击「调试」查看原始文本，检查格式。';
+          status.className = 'upload-status error';
+          QUESTIONS = [];
+          return;
+        }
+
+        QUESTIONS = parsed;
+        var cmap = {};
+        for (var i = 0; i < parsed.length; i++) {
+          var ch = parsed[i].chapter;
+          if (!cmap[ch]) cmap[ch] = 0;
+          cmap[ch]++;
+        }
+        status.innerHTML = '识别到 ' + parsed.length + ' 道题，' + Object.keys(cmap).length + ' 个章节。';
+        status.className = 'upload-status success';
+
+        setTimeout(function() {
+          document.getElementById('uploadOverlay').style.display = 'none';
+          document.getElementById('quizLayout').style.display = 'flex';
+          document.getElementById('fabWrong').style.display = 'flex';
+          initQuiz();
+        }, 600);
+      })
+      .catch(function(err) {
+        status.innerHTML = '解析失败：' + err.message;
+        status.className = 'upload-status error';
+      });
+  };
+  reader.readAsArrayBuffer(file);
+};
 </script>
 </body>
 </html>
