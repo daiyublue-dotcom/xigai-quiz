@@ -209,21 +209,17 @@ function normalizeText(text) {
   for (var i = 0; i < lines.length; i++) {
     var ln = lines[i].trim();
     if (!ln) { if (buf) { out.push(buf); buf = ''; } continue; }
-
-    // If this line and the buffer could be parts of the same logical line
-    // (short Chinese fragments, numbers, single letters with dots)
-    var shortFrag = /^(\d{1,3}|[A-E]|[第题选项正确率答案单多选判断]|[\.、\)．]\s*.+|[一-鿿]{1,6})$/.test(ln);
-    var bufShort = buf.length < 30 && !/\n/.test(buf);
-
-    if (shortFrag && bufShort) {
-      buf += (buf ? ' ' : '') + ln;
-    } else {
-      if (buf) { out.push(buf); }
-      buf = ln;
-    }
+    var shortFrag = /^(\d{1,3}|[A-E]|[第题选项正确率答案单多选判断参考]|[\.、\)．]\s*.+|[一-鿿]{1,8})$/.test(ln);
+    var bufShort = buf.length < 40 && !/\n/.test(buf);
+    if (shortFrag && bufShort) { buf += (buf ? ' ' : '') + ln; }
+    else { if (buf) { out.push(buf); } buf = ln; }
   }
   if (buf) out.push(buf);
-  return out.join('\n');
+  var result = out.join('\n');
+  // Fix fragmented Chinese patterns
+  result = result.replace(/第\s+(\d+|[一二三四五六七八九十百]+)\s+章/g, '第$1章');
+  result = result.replace(/第\s+(\d+|[一二三四五六七八九十百]+)\s+章\s*参考\s*答案/g, '第$1章参考答案');
+  return result;
 }
 
 function parseQuestions(text) {
@@ -399,140 +395,112 @@ function parseSurveyFormat(text) {
   return questions;
 }
 
-// Format 3: Answer key at end of chapter (第X章参考答案 一、单项选择题 1.A 2.B)
+// Format 3: Answer key at end of chapter
 function parseAnswerKeyFormat(text) {
   var questions = [];
-  var chapters = text.split(/(?:第[一二三四五六七八九十百\d]+章[^\n]*|参考答案)/);
 
-  // Better approach: find all (section header, questions, answer key) triplets
-  // Step 1: Find all chapter boundaries
-  var chapMatches = [];
-  var chapRe = /(第[一二三四五六七八九十百\d]+章[^\n]*)/g;
-  var cm;
-  while ((cm = chapRe.exec(text)) !== null) {
-    chapMatches.push({name: cm[1].trim(), idx: cm.index});
-  }
-
-  if (chapMatches.length === 0) {
-    // No chapters, treat whole document as one
-    chapMatches = [{name: '默认章节', idx: 0}];
-  }
-
-  for (var ci = 0; ci < chapMatches.length; ci++) {
-    var chapName = chapMatches[ci].name;
-    var chapStart = chapMatches[ci].idx;
-    var chapEnd = (ci + 1 < chapMatches.length) ? chapMatches[ci+1].idx : text.length;
-    var chapText = text.substring(chapStart, chapEnd);
-
-    // Find answer key in this chapter
-    var ansKeyMatch = chapText.match(/(?:第[一二三四五六七八九十百\d]+章)?\s*参考答案?\s*([\s\S]*)$/);
-    var answerKey = ansKeyMatch ? ansKeyMatch[1] : '';
-    var mainText = ansKeyMatch ? chapText.substring(0, chapText.indexOf(ansKeyMatch[0])) : chapText;
-
-    // Parse answer key: extract (type, answers) pairs
-    var answerMap = {}; // key: "single_0", "multi_0" → answer string
-    var ansSecRe = /([一二三四五六七八九十]+)、(\S+题)\s*([\d\.A-E\s]+)/g;
-    var as;
-    while ((as = ansSecRe.exec(answerKey)) !== null) {
-      var secType = as[2]; // 单项选择题 or 多项选择题
-      var ansStr = as[3];
-      // Parse "1.A 2.B 3.C" or "1.ABCD 2.ABCD"
-      var ansItems = ansStr.match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/g);
-      if (ansItems) {
-        for (var ai = 0; ai < ansItems.length; ai++) {
-          var item = ansItems[ai];
-          var im = item.match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/);
-          if (im) {
-            var prefix = secType.indexOf('单选') >= 0 ? 'single' : (secType.indexOf('多选') >= 0 ? 'multi' : 'unknown');
-            answerMap[prefix + '_' + im[1]] = im[2];
-          }
-        }
+  // Find chapter answer key blocks: 第1章参考答案 ... 第2章参考答案
+  var akBlocks = [];
+  var akRe = /第(\d+|[一二三四五六七八九十百]+)章参考答案\s*([\s\S]*?)(?=第(?:\d+|[一二三四五六七八九十百]+)章参考答案|第\d+章|$)/g;
+  var akm;
+  while ((akm = akRe.exec(text)) !== null) {
+    var cn = akm[1];
+    var akBody = akm[2];
+    // Parse singles: 一、单项选择题\n1.B 2.C ...
+    var singles = {};
+    var sm = akBody.match(/一[、\s]*单项[选择]*题\s*([\d\.A-E\s]+)/);
+    if (sm) {
+      var sitems = sm[1].match(/(\d+)\s*\.\s*([A-E])\b/g);
+      if (sitems) for (var si = 0; si < sitems.length; si++) {
+        var sm2 = sitems[si].match(/(\d+)\s*\.\s*([A-E])/);
+        if (sm2) singles[parseInt(sm2[1])] = sm2[2];
       }
     }
-
-    // Also try simpler pattern: "单项选择题 1.A 2.B ... 多项选择题 1.ABCD ..."
-    if (Object.keys(answerMap).length === 0) {
-      var singleSec = answerKey.match(/单[项选]*题[^多]*?([\d\.A-E\s]+)/);
-      var multiSec = answerKey.match(/多[项选]*题[^单参]*?([\d\.A-E\s]+)/);
-      [['single', singleSec], ['multi', multiSec]].forEach(function(pair) {
-        var prefix = pair[0], sec = pair[1];
-        if (sec) {
-          var items = sec[1].match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/g);
-          if (items) {
-            for (var ai = 0; ai < items.length; ai++) {
-              var im2 = items[ai].match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/);
-              if (im2) answerMap[prefix + '_' + im2[1]] = im2[2];
-            }
-          }
-        }
-      });
+    // Parse multis: 二、多项选择题\n1.ABCD 2.ABC ...
+    var multis = {};
+    var mm = akBody.match(/二[、\s]*多项[选择]*题\s*([\d\.A-E\s]+)/);
+    if (mm) {
+      var mitems = mm[1].match(/(\d+)\s*\.\s*([A-E]{2,5})\b/g);
+      if (mitems) for (var mi = 0; mi < mitems.length; mi++) {
+        var mm2 = mitems[mi].match(/(\d+)\s*\.\s*([A-E]{2,5})/);
+        if (mm2) multis[parseInt(mm2[1])] = mm2[2].split('');
+      }
     }
+    // Find the chapter name (Chinese version) near this answer key
+    var chapName = '第' + cn + '章';
+    // Try to find Chinese chapter name before this block
+    var beforeAk = text.substring(Math.max(0, text.indexOf(akm[0]) - 200), text.indexOf(akm[0]));
+    var cnMatch = beforeAk.match(/(第[一二三四五六七八九十百]+章[^\n]*)/);
+    if (cnMatch) chapName = cnMatch[1].trim();
 
-    // Parse questions from mainText
-    var secMatch = mainText.match(/([一二三四五六七八九十]+)、(\S+题)\s*([\s\S]*?)(?=[一二三四五六七八九十]+、\S+题|参考答案|第[一二三四五六七八九十百\d]+章|$)/g);
-    if (!secMatch) {
-      // No section headers found, try to parse all questions as single choice
-      secMatch = [mainText];
+    akBlocks.push({chapter: chapName, singles: singles, multis: multis, keyIdx: akm.index});
+  }
+
+  if (akBlocks.length === 0) return [];
+
+  // For each chapter, find its questions in the text before the answer key
+  for (var bi = 0; bi < akBlocks.length; bi++) {
+    var block = akBlocks[bi];
+    var startIdx = bi === 0 ? 0 : akBlocks[bi-1].keyIdx;
+    var endIdx = block.keyIdx;
+    var bodyText = text.substring(startIdx, endIdx);
+
+    // Find section headers
+    var sections = [];
+    var secRe = /([一二三四五六七八九十]+)、(\S+题)\s*([\s\S]*?)(?=[一二三四五六七八九十]+、\S+题|参考答案|第\d+章参考答案|第[一二三四五六七八九十百]+章|$)/g;
+    var secm;
+    while ((secm = secRe.exec(bodyText)) !== null) {
+      sections.push({isMulti: secm[2].indexOf('多选') >= 0, body: secm[3]});
     }
+    if (sections.length === 0) sections = [{isMulti: false, body: bodyText}];
 
-    var secCounter = {single: 0, multi: 0};
+    var singleIdx = 0, multiIdx = 0;
 
-    for (var si = 0; si < secMatch.length; si++) {
-      var secText = secMatch[si];
-      // Determine section type
-      var secTypeHdr = secText.match(/[一二三四五六七八九十]+、(\S+题)/);
-      var isMulti = secTypeHdr && secTypeHdr[1].indexOf('多选') >= 0;
-      var prefix = isMulti ? 'multi' : 'single';
+    for (var si = 0; si < sections.length; si++) {
+      var sec = sections[si];
+      var isMulti = sec.isMulti;
+      var answerMap = isMulti ? block.multis : block.singles;
 
-      // Find all questions in this section
+      // Find questions in this section: "1、stem... A. opt..."
       var qRe = /(\d+)\s*[、\.\)]\s*([\s\S]*?)(?=\d+\s*[、\.\)]|$)/g;
       var qm;
-      var qInSec = [];
-      while ((qm = qRe.exec(secText)) !== null) {
+      while ((qm = qRe.exec(sec.body)) !== null) {
         var qNum = parseInt(qm[1]);
         var qBody = qm[2].trim();
-        qInSec.push({num: qNum, body: qBody});
-      }
-
-      // Parse each question
-      for (var qi = 0; qi < qInSec.length; qi++) {
-        var qInfo = qInSec[qi];
-        var qBody = qInfo.body;
-
-        // Extract stem (before options)
-        var stem = qBody;
-        var options = extractOptions(qBody);
-
-        // Remove option text from stem
-        for (var k in options) {
-          stem = stem.replace(options[k], '');
+        var answer = answerMap[qNum];
+        if (!answer && !isMulti) {
+          // Sequential fallback
+          var keys = Object.keys(answerMap).sort(function(a,b){return a-b});
+          answer = answerMap[keys[singleIdx]] || '';
         }
-        stem = stem.replace(/[A-E][\.、\)．]/g, '');
-        stem = stem.replace(/（\s*[A-E]?\s*）/g, '（）').replace(/\(\s*[A-E]?\s*\)/g, '()');
+        if (isMulti) multiIdx++; else singleIdx++;
+
+        if (!answer) continue;
+
+        // Extract stem and options
+        var options = extractOptions(qBody);
+        var stem = qBody;
+        // Remove options from stem
+        var optKeys = Object.keys(options);
+        for (var ok = 0; ok < optKeys.length; ok++) {
+          stem = stem.split(options[optKeys[ok]]).join('');
+        }
+        stem = stem.replace(/[A-E]\s*[\.、\)．]/g, '');
+        stem = stem.replace(/[（\(]\s*[A-E]?\s*[）\)]/g, '（）');
         stem = stem.replace(/\s+/g, ' ').trim();
 
-        // Get answer from answer key
-        var ansKey = prefix + '_' + qInfo.num;
-        var answer = answerMap[ansKey] || '';
-        if (!answer && !isMulti) {
-          // Try alternative key with section counter
-          answer = answerMap[prefix + '_' + (secCounter[prefix] + 1)] || '';
-        }
-        secCounter[prefix]++;
+        if (!stem || optKeys.length < 2) continue;
 
-        if (answer && /^[A-E]{2,}$/.test(answer)) answer = answer.split('');
-        var type = isMulti ? 'multi' : 'single';
+        if (typeof answer === 'string' && answer.length > 1) answer = answer.split('');
 
-        if (stem && Object.keys(options).length >= 2 && answer) {
-          questions.push({
-            id: questions.length + 1,
-            type: type,
-            chapter: chapName,
-            stem: stem,
-            options: options,
-            answer: answer
-          });
-        }
+        questions.push({
+          id: questions.length + 1,
+          type: isMulti ? 'multi' : 'single',
+          chapter: block.chapter,
+          stem: stem,
+          options: options,
+          answer: answer
+        });
       }
     }
   }
