@@ -549,10 +549,10 @@ window.jumpTo=function(qid){
   setTimeout(function(){var e=document.getElementById('qcard-'+qid);if(e)e.scrollIntoView({behavior:'smooth',block:'center'});},300);
 };
 
-function scrollToTop(){
+window.scrollToTop=function(){
   var main=document.querySelector('.main');
   if(main)main.scrollTo({top:0,behavior:'smooth'});
-}
+};
 
 // Show/hide back-to-top button on scroll
 (function(){
