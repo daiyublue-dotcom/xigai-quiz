@@ -1,0 +1,636 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>习概题库生成器 — 上传 Word 即刷题</title>
+<script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<style>
+:root{
+  --bg:#faf9f7;--card:#fff;--border:#eae7e2;--text:#1a1a1a;--muted:#706e6a;
+  --faint:#a09d98;--accent:#1a1a1a;--hover:#f4f2ef;--active:#edebe8;
+  --correct:#3e6d51;--correct-bg:#f2f7f3;--wrong:#b84c48;--wrong-bg:#faf5f5;
+  --shadow:0 1px 3px rgba(0,0,0,.04);--shadow-lg:0 8px 24px rgba(0,0,0,.06);
+  --radius:8px;
+  --font:'Inter Display','SF Pro Display',-apple-system,'Helvetica Neue','PingFang SC','Microsoft YaHei',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{font-size:15px}
+body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:100vh;-webkit-font-smoothing:antialiased;font-weight:420;letter-spacing:-.005em;line-height:1.55}
+.header{background:rgba(250,249,247,.9);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);padding:15px 32px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:100;border-bottom:1px solid var(--border);gap:16px}
+.header h1{font-size:1rem;font-weight:550;letter-spacing:-.01em;color:var(--text)}
+.header .stats{display:flex;gap:20px}
+.header .stats span{font-size:.73rem;color:var(--muted);font-weight:450}
+.layout{display:flex;max-width:1344px;margin:0 auto;height:calc(100vh - 57px)}
+.sidebar{width:224px;background:var(--bg);border-right:1px solid var(--border);overflow-y:auto;flex-shrink:0;padding:8px 0}
+.sidebar .chapter{padding:8px 18px;margin:1px 10px;cursor:pointer;font-size:.8rem;color:var(--muted);display:flex;justify-content:space-between;align-items:center;border-radius:6px;transition:all .12s ease;font-weight:430}
+.sidebar .chapter:hover{background:var(--hover);color:var(--text)}
+.sidebar .chapter.active{background:var(--active);color:var(--text);font-weight:520}
+.sidebar .chapter .badge{font-size:.67rem;color:var(--faint);font-weight:430;min-width:20px;text-align:right}
+.sidebar .chapter.active .badge{color:var(--muted)}
+.main{flex:1;overflow-y:auto;padding:32px 40px}
+.toolbar{display:flex;gap:8px;margin-bottom:28px;flex-wrap:wrap;align-items:center}
+.toolbar button,.toolbar select{padding:8px 15px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card);font-size:.77rem;cursor:pointer;color:var(--muted);font-family:var(--font);font-weight:440;transition:all .1s ease;box-shadow:var(--shadow)}
+.toolbar button:hover{background:var(--hover);color:var(--text);border-color:#d7d3cc}
+.toolbar button.active{background:var(--accent);color:#fff;border-color:var(--accent)}
+.toolbar button.active:hover{background:#333}
+.toolbar select{-webkit-appearance:none;appearance:none;padding-right:32px;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%23a09d98'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 12px center}
+.toolbar .mode-toggle{display:flex}
+.toolbar .mode-toggle button:first-child{border-radius:var(--radius) 0 0 var(--radius)}
+.toolbar .mode-toggle button:last-child{border-radius:0 var(--radius) var(--radius) 0;border-left:none}
+.summary-bar{display:flex;margin-bottom:28px;background:var(--card);border-radius:var(--radius);border:1px solid var(--border);overflow:hidden;box-shadow:var(--shadow)}
+.summary-item{text-align:center;flex:1;padding:17px 24px;border-right:1px solid var(--border)}
+.summary-item:last-child{border-right:none}
+.summary-item .num{font-size:1.55rem;font-weight:530;letter-spacing:-.025em;line-height:1;margin-bottom:4px}
+.summary-item .label{font-size:.67rem;color:var(--faint);font-weight:450;text-transform:uppercase;letter-spacing:.04em}
+.summary-item .num.total{color:var(--text)}.summary-item .num.done{color:var(--text)}
+.summary-item .num.correct-num{color:var(--correct)}.summary-item .num.wrong-num{color:var(--wrong)}
+.question-card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:24px 30px;margin-bottom:10px;transition:all .16s ease;box-shadow:var(--shadow)}
+.question-card:hover{border-color:#d8d4ce;box-shadow:var(--shadow-lg)}
+.question-card.correct{border-left:3px solid var(--correct);background:var(--correct-bg)}
+.question-card.wrong{border-left:3px solid var(--wrong);background:var(--wrong-bg)}
+.q-header{display:flex;align-items:flex-start;gap:14px;margin-bottom:18px}
+.q-num{font-weight:500;color:var(--faint);font-size:.77rem;min-width:30px}
+.q-type{font-size:.67rem;padding:4px 10px;border-radius:20px;font-weight:500;letter-spacing:.03em;white-space:nowrap;background:var(--hover);color:var(--muted)}
+.q-stem{font-size:.97rem;line-height:1.65;flex:1;min-width:200px;color:var(--text)}
+.options{display:flex;flex-direction:column;gap:6px;margin-bottom:16px}
+.option{display:flex;align-items:center;gap:12px;padding:13px 17px;border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;transition:all .1s ease;font-size:.9rem;color:var(--text);font-weight:430}
+.option:hover{background:var(--hover);border-color:#d7d3cc}
+.option.selected{border-color:var(--accent);background:var(--active)}
+.option.correct-answer{border-color:var(--correct);background:var(--correct-bg)}
+.option.wrong-answer{border-color:var(--wrong);background:var(--wrong-bg)}
+.opt-letter{min-width:28px;height:28px;border-radius:6px;border:1px solid #d7d3cc;display:flex;align-items:center;justify-content:center;font-weight:500;font-size:.73rem;flex-shrink:0;color:var(--faint);transition:all .1s ease;padding:0 8px}
+.option.selected .opt-letter{border-color:var(--accent);background:var(--accent);color:#fff}
+.option.correct-answer .opt-letter{border-color:var(--correct);background:var(--correct);color:#fff}
+.option.wrong-answer .opt-letter{border-color:var(--wrong);background:var(--wrong);color:#fff}
+.opt-text{line-height:1.5;flex:1}
+.btn-submit{background:var(--accent);color:#fff;border:none;padding:8px 22px;border-radius:6px;cursor:pointer;font-size:.83rem;font-family:var(--font);font-weight:500;transition:all .1s ease}
+.btn-submit:hover{background:#333}
+.multi-submit-bar{display:flex;align-items:center;gap:14px;margin-top:6px}
+.multi-submit-bar .hint{font-size:.73rem;color:var(--faint)}
+.feedback{padding:11px 17px;border-radius:6px;margin-top:12px;font-size:.83rem;display:none;line-height:1.5}
+.feedback.show{display:block}
+.feedback.correct{background:var(--correct-bg);color:var(--correct);font-weight:440}
+.feedback.wrong-msg{background:var(--wrong-bg);color:var(--wrong);font-weight:440}
+.feedback .correct-ans{font-weight:550}
+.q-actions{margin-top:12px;display:flex;gap:8px}
+.q-actions button{font-size:.73rem;padding:5px 14px;border:1px solid var(--border);border-radius:6px;background:var(--card);cursor:pointer;color:var(--faint);font-family:var(--font);font-weight:440;transition:all .1s ease}
+.q-actions button:hover{color:var(--text);background:var(--hover);border-color:#d7d3cc}
+.empty-state{text-align:center;padding:120px 20px;color:var(--faint)}
+.empty-state .icon{font-size:3rem;margin-bottom:16px;opacity:.3}
+.wrong-panel{position:fixed;top:0;right:-420px;width:400px;height:100vh;background:var(--card);box-shadow:-4px 0 32px rgba(0,0,0,.07);z-index:200;transition:right .3s cubic-bezier(.4,0,.2,1);display:flex;flex-direction:column;border-left:1px solid var(--border)}
+.wrong-panel.open{right:0}
+.wrong-panel-inner{flex:1;overflow-y:auto;padding:28px}
+.wrong-panel-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px;padding-bottom:16px;border-bottom:1px solid var(--border)}
+.wrong-panel-header h3{font-size:1.07rem;font-weight:530}
+.wrong-panel-header button{border:none;background:none;font-size:1.3rem;cursor:pointer;color:var(--faint);padding:4px 8px;border-radius:4px;transition:all .1s ease}
+.wrong-panel-header button:hover{color:var(--text);background:var(--hover)}
+.wrong-item{padding:14px 10px;border-radius:6px;cursor:pointer;transition:all .1s ease;margin-bottom:2px}
+.wrong-item:hover{background:var(--hover)}
+.wrong-q{margin-bottom:4px;color:var(--text);font-weight:440;line-height:1.5}
+.wrong-a{font-size:.73rem;margin-bottom:3px;line-height:1.5;color:var(--muted)}
+.toast-container{position:fixed;top:24px;right:24px;z-index:9999}
+.fab-wrong{position:fixed;bottom:32px;right:32px;width:46px;height:46px;border-radius:var(--radius);background:var(--accent);color:#fff;border:none;cursor:pointer;font-size:1.07rem;z-index:150;display:flex;align-items:center;justify-content:center;box-shadow:0 2px 10px rgba(0,0,0,.12);transition:all .15s ease}
+.fab-wrong:hover{background:#333;transform:translateY(-1px);box-shadow:0 6px 18px rgba(0,0,0,.16)}
+.fab-top{position:fixed;bottom:32px;right:90px;width:46px;height:46px;border-radius:var(--radius);background:var(--card);color:var(--muted);border:1px solid var(--border);cursor:pointer;z-index:150;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow);transition:all .15s ease;opacity:0;pointer-events:none}
+.fab-top.visible{opacity:1;pointer-events:auto}
+.fab-top:hover{background:var(--hover);color:var(--text);border-color:#d7d3cc}
+.badge-contact{position:fixed;bottom:16px;right:100px;color:var(--faint);font-size:.67rem;z-index:150;font-family:var(--font);font-weight:440;background:var(--card);padding:4px 12px;border-radius:20px;border:1px solid var(--border);box-shadow:var(--shadow);white-space:nowrap}
+
+/* Upload overlay */
+.upload-overlay{position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.03);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+.upload-box{background:var(--card);border:2px dashed var(--border);border-radius:16px;padding:48px 60px;text-align:center;max-width:480px;width:90%;transition:all .2s ease;cursor:pointer}
+.upload-box:hover,.upload-box.drag{border-color:var(--accent);background:var(--hover)}
+.upload-box .icon{font-size:3rem;margin-bottom:16px;opacity:.4}
+.upload-box h2{font-size:1.2rem;font-weight:530;margin-bottom:8px;color:var(--text)}
+.upload-box p{font-size:.83rem;color:var(--muted);margin-bottom:4px}
+.upload-box input{display:none}
+.upload-status{margin-top:16px;font-size:.8rem;color:var(--muted);min-height:24px}
+.upload-status.error{color:var(--wrong)}
+.upload-status.success{color:var(--correct)}
+.upload-status .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite;margin-right:6px;vertical-align:middle}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media(max-width:768px){
+  .layout{flex-direction:column;height:auto}
+  .sidebar{width:100%;border-right:none;border-bottom:1px solid var(--border);padding:6px 8px;display:flex;flex-direction:row;flex-wrap:nowrap;overflow-x:auto;max-height:60px;gap:2px}
+  .sidebar .chapter{font-size:.7rem;padding:6px 10px;margin:0 1px;white-space:nowrap;flex-shrink:0;border-radius:4px}
+  .main{padding:18px 14px}
+  .toolbar{gap:5px;margin-bottom:20px}
+  .toolbar button,.toolbar select{font-size:.7rem;padding:6px 10px}
+  .header{padding:12px 16px}
+  .header h1{font-size:.9rem}
+  .header .stats{gap:12px}
+  .header .stats span{font-size:.67rem}
+  .question-card{padding:16px 18px}
+  .q-stem{font-size:.87rem}
+  .option{padding:10px 13px;font-size:.83rem}
+  .summary-bar{border-radius:6px}
+  .summary-item{padding:12px 14px}
+  .summary-item .num{font-size:1.2rem}
+  .wrong-panel{width:100vw;right:-100vw}
+  .upload-box{padding:32px 24px}
+}
+</style>
+</head>
+<body>
+
+<header class="header">
+  <h1>习概题库生成器</h1>
+  <div class="stats">
+    <span id="statDone">已答 0</span>
+    <span id="statCorrect">正确 0</span>
+    <span id="statWrong">错误 0</span>
+    <span id="statTotal">总计 0</span>
+  </div>
+</header>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="upload-overlay" id="uploadOverlay">
+  <div class="upload-box" id="uploadBox">
+    <div class="icon">&#128196;</div>
+    <h2>上传 Word 文档开始刷题</h2>
+    <p>拖拽 .docx 文件到此处，或点击选择文件</p>
+    <p style="font-size:.73rem;color:var(--faint);margin-top:4px">支持标准题库格式：题号 + 题干 + 选项 + 答案</p>
+    <input type="file" id="fileInput" accept=".docx" onchange="handleFile(this.files[0])">
+    <div class="upload-status" id="uploadStatus"></div>
+  </div>
+</div>
+
+<div class="layout" style="display:none" id="quizLayout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <main class="main">
+    <div class="toolbar">
+      <div class="mode-toggle">
+        <button id="btnModeChapter" class="active" onclick="setPracticeMode('chapter')">章节刷题</button>
+        <button id="btnModeRandom" onclick="setPracticeMode('random')">随机刷题</button>
+      </div>
+      <select id="chapterSelect" onchange="setChapter(this.value)"><option value="all">全部章节</option></select>
+      <div class="mode-toggle" style="margin-left:8px">
+        <button id="btnFilterAll" class="active" onclick="setFilter('all')">全部</button>
+        <button id="btnFilterUndone" onclick="setFilter('undone')">未答</button>
+        <button id="btnFilterWrong" onclick="setFilter('wrong')">错题</button>
+      </div>
+      <button onclick="resetUpload()" style="margin-left:auto">重新上传</button>
+      <button onclick="resetAll()">重置进度</button>
+    </div>
+    <div class="summary-bar" id="summaryBar"></div>
+    <div id="questionList"></div>
+  </main>
+</div>
+
+<button class="fab-wrong" id="fabWrong" onclick="toggleWrongPanel()" title="错题本" style="display:none">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+</button>
+<button class="fab-top" id="fabTop" onclick="scrollToTop()" title="返回顶部">
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 15l-6-6-6 6"/></svg>
+</button>
+<div class="badge-contact">有问题联系作者 wx:FishloveStar4ever</div>
+
+<div class="wrong-panel" id="wrongPanel">
+  <div class="wrong-panel-inner">
+    <div class="wrong-panel-header"><h3>错题本</h3><button onclick="toggleWrongPanel()">&times;</button></div>
+    <div id="wrongList"></div>
+  </div>
+</div>
+
+<script>
+// --- Parser ---
+var QUESTIONS = [];
+var currentChapterName = '默认章节';
+
+function parseQuestions(text) {
+  var questions = [];
+  var lines = text.split(/\n/).map(function(l){return l.trim()}).filter(function(l){return l.length>0});
+
+  // Detect chapter headers: 第X章 or 导论 etc.
+  var chapterPattern = /^(第[一二三四五六七八九十百]+章|导论|绪论|前言).*/;
+
+  var i = 0;
+  while (i < lines.length) {
+    var line = lines[i];
+
+    // Skip chapter headers (they become the current chapter)
+    if (chapterPattern.test(line)) {
+      currentChapterName = line.replace(/\s+/g, '').substring(0, 15);
+      i++;
+      continue;
+    }
+
+    // Detect question start: number followed by . or 、 or )
+    var qMatch = line.match(/^(\d+)[\.、\)]\s*(.*)/);
+    if (!qMatch) { i++; continue; }
+
+    var stem = qMatch[2].trim();
+    var options = {};
+    var answer = '';
+    i++;
+
+    // Collect options (A. B. C. etc) and answer line
+    while (i < lines.length) {
+      var optLine = lines[i];
+
+      // Check for answer line
+      var ansMatch = optLine.match(/^答案[：:]\s*(.+)/);
+      if (ansMatch) {
+        answer = ansMatch[1].trim().replace(/\s+/g, '');
+        i++;
+        break;
+      }
+
+      // Check if next question starts
+      if (/^\d+[\.、\)]/.test(optLine)) break;
+      // Check if chapter header
+      if (chapterPattern.test(optLine)) break;
+
+      // Check for option: A. or A、 text
+      var optMatch = optLine.match(/^([A-E])[\.、\)]\s*(.+)/);
+      if (optMatch) {
+        options[optMatch[1]] = optMatch[2].trim();
+        i++;
+        continue;
+      }
+
+      // Continuation of stem (multi-line)
+      stem += optLine;
+      i++;
+    }
+
+    if (stem && Object.keys(options).length >= 2 && answer) {
+      var type = 'single';
+      var finalAnswer = answer;
+
+      // Detect type
+      if (answer === '正确' || answer === '错误') {
+        type = 'truefalse';
+        finalAnswer = answer;
+        // For true/false, ensure we have 正确/错误 options
+        if (!options['正确'] && !options['错误']) {
+          options = {'正确': '正确', '错误': '错误'};
+        }
+      } else if (/^[A-E]{2,}$/.test(answer)) {
+        type = 'multi';
+        finalAnswer = answer.split('');
+      } else if (/^[A-E]$/.test(answer)) {
+        type = 'single';
+      }
+
+      questions.push({
+        id: questions.length + 1,
+        type: type,
+        chapter: currentChapterName,
+        stem: stem,
+        options: options,
+        answer: finalAnswer
+      });
+    }
+  }
+
+  return questions;
+}
+
+// --- File handler ---
+function handleFile(file) {
+  if (!file) return;
+  var status = document.getElementById('uploadStatus');
+  status.innerHTML = '<span class="spinner"></span>正在解析文档...';
+  status.className = 'upload-status';
+
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    var arrayBuffer = e.target.result;
+    mammoth.extractRawText({arrayBuffer: arrayBuffer})
+      .then(function(result) {
+        var text = result.value;
+        currentChapterName = '默认章节';
+        var parsed = parseQuestions(text);
+
+        if (parsed.length === 0) {
+          status.innerHTML = '未识别到题目，请检查文档格式。支持格式：题号. 题干 + A. 选项 + 答案：X';
+          status.className = 'upload-status error';
+          return;
+        }
+
+        QUESTIONS = parsed;
+        status.innerHTML = '识别到 ' + parsed.length + ' 道题，' +
+          Object.keys(getChapterMap()).length + ' 个章节。正在进入刷题模式...';
+        status.className = 'upload-status success';
+
+        setTimeout(function() {
+          document.getElementById('uploadOverlay').style.display = 'none';
+          document.getElementById('quizLayout').style.display = 'flex';
+          document.getElementById('fabWrong').style.display = 'flex';
+          initQuiz();
+        }, 600);
+      })
+      .catch(function(err) {
+        status.innerHTML = '解析失败：' + err.message;
+        status.className = 'upload-status error';
+      });
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function getChapterMap() {
+  var map = {};
+  for (var i = 0; i < QUESTIONS.length; i++) {
+    var ch = QUESTIONS[i].chapter;
+    if (!map[ch]) map[ch] = [];
+    map[ch].push(QUESTIONS[i]);
+  }
+  return map;
+}
+
+// --- Drag & drop ---
+(function() {
+  var box = document.getElementById('uploadBox');
+  var input = document.getElementById('fileInput');
+
+  box.addEventListener('click', function() { input.click(); });
+
+  box.addEventListener('dragover', function(e) {
+    e.preventDefault(); box.classList.add('drag');
+  });
+  box.addEventListener('dragleave', function() { box.classList.remove('drag'); });
+  box.addEventListener('drop', function(e) {
+    e.preventDefault(); box.classList.remove('drag');
+    var file = e.dataTransfer.files[0];
+    if (file && file.name.endsWith('.docx')) handleFile(file);
+    else {
+      var st = document.getElementById('uploadStatus');
+      st.innerHTML = '请上传 .docx 格式的 Word 文档';
+      st.className = 'upload-status error';
+    }
+  });
+})();
+
+function resetUpload() {
+  QUESTIONS = [];
+  userAnswers = {}; multiSubmitted = {}; localWrongBook = {};
+  saveState(); saveWrongBook();
+  document.getElementById('uploadOverlay').style.display = 'flex';
+  document.getElementById('quizLayout').style.display = 'none';
+  document.getElementById('fabWrong').style.display = 'none';
+  document.getElementById('uploadStatus').innerHTML = '';
+  document.getElementById('uploadStatus').className = 'upload-status';
+  document.getElementById('fileInput').value = '';
+}
+
+// --- Quiz engine (same as before) ---
+var userAnswers = {}, multiSubmitted = {}, filterMode = 'all', currentChapter = 'all', practiceMode = 'chapter';
+
+function saveState(){
+  try{var d={ua:userAnswers,ms:multiSubmitted};localStorage.setItem('xigai_up_v1',JSON.stringify(d));}catch(e){}
+}
+function loadState(){
+  try{var r=localStorage.getItem('xigai_up_v1');if(r){var d=JSON.parse(r);userAnswers=d.ua||{};multiSubmitted=d.ms||{};}}catch(e){}
+}
+var localWrongBook={};
+function saveWrongBook(){
+  try{localStorage.setItem('xigai_up_wb_v1',JSON.stringify(localWrongBook));}catch(e){}
+}
+function loadWrongBook(){
+  try{var r=localStorage.getItem('xigai_up_wb_v1');if(r)localWrongBook=JSON.parse(r);}catch(e){}
+}
+function findQ(id){for(var i=0;i<QUESTIONS.length;i++)if(QUESTIONS[i].id===id)return QUESTIONS[i];return null}
+function isAnswered(id){
+  var q=findQ(id);if(!q)return false;
+  return (userAnswers[id]&&userAnswers[id].length>0)&&(q.type!=='multi'||!!multiSubmitted[id]);
+}
+function checkAnswer(id){
+  var q=findQ(id);if(!q||!isAnswered(id))return null;
+  var u=userAnswers[id]||[], c=Array.isArray(q.answer)?q.answer.slice():[q.answer];
+  if(u.length!==c.length)return false;
+  for(var i=0;i<c.length;i++)if(u.indexOf(c[i])<0)return false;
+  return true;
+}
+function getChapters(){
+  var s={},c=[];
+  for(var i=0;i<QUESTIONS.length;i++){var ch=QUESTIONS[i].chapter;if(!s[ch]){s[ch]=true;c.push(ch);}}
+  return c;
+}
+function getChapterCounts(ch){
+  var t=0,d=0;
+  for(var i=0;i<QUESTIONS.length;i++){if(QUESTIONS[i].chapter!==ch)continue;t++;if(isAnswered(QUESTIONS[i].id))d++;}
+  return{total:t,done:d};
+}
+function getFiltered(){
+  var qs=QUESTIONS.slice();
+  if(currentChapter!=='all')qs=qs.filter(function(q){return q.chapter===currentChapter});
+  if(filterMode==='undone')qs=qs.filter(function(q){return!isAnswered(q.id)});
+  else if(filterMode==='wrong')qs=qs.filter(function(q){return isAnswered(q.id)&&checkAnswer(q.id)===false});
+  return qs;
+}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+var typeLabels={single:'单选题',multi:'多选题',truefalse:'判断题'};
+
+function renderQ(q){
+  var m=q.type==='multi';
+  var hs=userAnswers[q.id]&&userAnswers[q.id].length>0;
+  var sub=!m||!!multiSubmitted[q.id];
+  var ans=hs&&sub;
+  var ok=ans?checkAnswer(q.id):null;
+  var cls=ans?(ok?'correct':'wrong'):'';
+
+  var h='<div class="question-card '+cls+'" id="qcard-'+q.id+'">';
+  h+='<div class="q-header">';
+  h+='<span class="q-num">#'+q.id+'</span>';
+  h+='<span class="q-type">'+typeLabels[q.type]+'</span>';
+  h+='<span class="q-stem">'+esc(q.stem)+'</span>';
+  h+='</div>';
+
+  if(q.options){
+    var keys=Object.keys(q.options);
+    h+='<div class="options">';
+    for(var k=0;k<keys.length;k++){
+      var lt=keys[k], tx=q.options[lt], sc='';
+      if(ans){
+        var ca=Array.isArray(q.answer)?q.answer:[q.answer];
+        if(ca.indexOf(lt)>=0)sc=' correct-answer';
+        else if(userAnswers[q.id]&&userAnswers[q.id].indexOf(lt)>=0)sc=' wrong-answer';
+      }else if(userAnswers[q.id]&&userAnswers[q.id].indexOf(lt)>=0){sc=' selected';}
+      var clk=ans?'':(' onclick="selectOpt('+q.id+',\''+lt.replace(/'/g,"\\'")+'\')"');
+      h+='<div class="option'+sc+'"'+clk+'>';
+      h+='<span class="opt-letter">'+esc(lt)+'</span>';
+      h+='<span class="opt-text">'+esc(tx)+'</span>';
+      h+='</div>';
+    }
+    h+='</div>';
+  }
+
+  if(!ans){
+    if(m){
+      var sel=userAnswers[q.id]?userAnswers[q.id].length:0;
+      h+='<div class="multi-submit-bar">';
+      h+='<button class="btn-submit" onclick="submitMulti('+q.id+')">提交答案</button>';
+      h+='<span class="hint">已选 '+sel+' 项 &middot; 点击选项切换</span>';
+      h+='</div>';
+    }else{
+      h+='<span class="hint" style="font-size:.73rem;color:var(--faint)">点击选项提交答案</span>';
+    }
+  }else{
+    if(ok){
+      h+='<div class="feedback correct show">回答正确</div>';
+    }else{
+      var ca=Array.isArray(q.answer)?q.answer.join(''):q.answer;
+      h+='<div class="feedback wrong-msg show">回答错误，正确答案：<span class="correct-ans">'+esc(ca)+'</span></div>';
+    }
+    h+='<div class="q-actions"><button onclick="resetQ('+q.id+')">重做</button></div>';
+  }
+  h+='</div>';
+  return h;
+}
+
+function renderAll(){
+  var qs=getFiltered(), h='';
+  for(var i=0;i<qs.length;i++)h+=renderQ(qs[i]);
+  if(!h)h='<div class="empty-state"><div class="icon">&#9674;</div><p>暂无题目</p></div>';
+  document.getElementById('questionList').innerHTML=h;
+  updateSummary();
+}
+function updateSummary(){
+  var qs=getFiltered(), t=qs.length, d=0, c=0, w=0;
+  for(var i=0;i<qs.length;i++){if(isAnswered(qs[i].id)){d++;if(checkAnswer(qs[i].id))c++;else w++;}}
+  document.getElementById('summaryBar').innerHTML=
+    '<div class="summary-item"><div class="num total">'+t+'</div><div class="label">Current</div></div>'+
+    '<div class="summary-item"><div class="num done">'+d+'</div><div class="label">Done</div></div>'+
+    '<div class="summary-item"><div class="num correct-num">'+c+'</div><div class="label">Correct</div></div>'+
+    '<div class="summary-item"><div class="num wrong-num">'+w+'</div><div class="label">Wrong</div></div>';
+}
+function updateStats(){
+  var t=QUESTIONS.length, d=0, c=0, w=0;
+  for(var i=0;i<QUESTIONS.length;i++){if(isAnswered(QUESTIONS[i].id)){d++;if(checkAnswer(QUESTIONS[i].id))c++;else w++;}}
+  document.getElementById('statDone').textContent='已答 '+d;
+  document.getElementById('statCorrect').textContent='正确 '+c;
+  document.getElementById('statWrong').textContent='错误 '+w;
+  document.getElementById('statTotal').textContent='总计 '+t;
+  var f=document.getElementById('fabWrong');if(w>0)f.style.display='flex';else f.style.display='none';
+}
+window.selectOpt=function(qid,letter){
+  var q=findQ(qid);if(!q||isAnswered(qid))return;
+  if(q.type==='multi'){
+    if(!userAnswers[qid])userAnswers[qid]=[];
+    var idx=userAnswers[qid].indexOf(letter);
+    if(idx>=0)userAnswers[qid].splice(idx,1);else userAnswers[qid].push(letter);
+  }else{
+    userAnswers[qid]=[letter];
+    var ca=Array.isArray(q.answer)?q.answer:[q.answer];
+    var u=userAnswers[qid], ok=ca.length===u.length;
+    if(ok)for(var i=0;i<ca.length;i++)if(u.indexOf(ca[i])<0){ok=false;break}
+    if(!ok)addWrong(qid);else removeWrong(qid);
+  }
+  saveState();refresh();
+};
+window.submitMulti=function(qid){
+  var q=findQ(qid);if(!q)return;
+  multiSubmitted[qid]=true;saveState();
+  var ca=Array.isArray(q.answer)?q.answer:[q.answer];
+  var u=userAnswers[qid]||[], ok=ca.length===u.length;
+  if(ok)for(var i=0;i<ca.length;i++)if(u.indexOf(ca[i])<0){ok=false;break}
+  if(!ok)addWrong(qid);else removeWrong(qid);
+  refresh();
+};
+window.resetQ=function(qid){delete userAnswers[qid];delete multiSubmitted[qid];removeWrong(qid);saveState();refresh();};
+function addWrong(qid){
+  var q=findQ(qid);if(!q)return;
+  localWrongBook[qid]={qid:qid,stem:q.stem,ua:(userAnswers[qid]||[]).join(''),ca:Array.isArray(q.answer)?q.answer.join(''):q.answer,chapter:q.chapter};
+  saveWrongBook();
+}
+function removeWrong(qid){delete localWrongBook[qid];saveWrongBook();}
+function refresh(){renderAll();updateStats();renderSidebar();renderChapterSelect();}
+function renderSidebar(){
+  var chs=getChapters(), h='';
+  for(var i=0;i<chs.length;i++){
+    var c=chs[i], cnt=getChapterCounts(c);
+    h+='<div class="chapter'+(currentChapter===c?' active':'')+'" onclick="setChapter(\''+esc(c)+'\')"><span>'+esc(c)+'</span><span class="badge">'+cnt.done+'/'+cnt.total+'</span></div>';
+  }
+  document.getElementById('sidebar').innerHTML=h;
+}
+function renderChapterSelect(){
+  var chs=getChapters(), s=document.getElementById('chapterSelect'), h='<option value="all">全部章节</option>';
+  for(var i=0;i<chs.length;i++)h+='<option value="'+esc(chs[i])+'"'+(currentChapter===chs[i]?' selected':'')+'>'+esc(chs[i])+'</option>';
+  s.innerHTML=h;
+}
+window.setChapter=function(ch){currentChapter=ch;document.getElementById('chapterSelect').value=ch;refresh();};
+window.setPracticeMode=function(m){
+  practiceMode=m;
+  document.getElementById('btnModeChapter').className=m==='chapter'?'active':'';
+  document.getElementById('btnModeRandom').className=m==='random'?'active':'';
+  if(m==='random'){renderRandom();}else{window._rand=null;renderAll();}
+  updateStats();renderSidebar();renderChapterSelect();
+};
+window.renderRandom=function(){
+  var pool=QUESTIONS.slice();
+  if(currentChapter!=='all')pool=pool.filter(function(q){return q.chapter===currentChapter});
+  if(filterMode==='wrong')pool=pool.filter(function(q){return isAnswered(q.id)&&checkAnswer(q.id)===false});
+  else if(filterMode==='undone')pool=pool.filter(function(q){return!isAnswered(q.id)});
+  for(var i=pool.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1)),t=pool[i];pool[i]=pool[j];pool[j]=t;}
+  window._rand=pool.map(function(q){return q.id});
+  var h='';
+  for(var i=0;i<window._rand.length;i++){var q=findQ(window._rand[i]);if(q)h+=renderQ(q);}
+  if(!h)h='<div class="empty-state"><div class="icon">&#9674;</div><p>暂无题目</p></div>';
+  document.getElementById('questionList').innerHTML=h;updateSummary();
+};
+window.setFilter=function(m){
+  filterMode=m;
+  document.getElementById('btnFilterAll').className=m==='all'?'active':'';
+  document.getElementById('btnFilterUndone').className=m==='undone'?'active':'';
+  document.getElementById('btnFilterWrong').className=m==='wrong'?'active':'';
+  if(practiceMode==='random')renderRandom();else renderAll();
+  updateStats();renderSidebar();renderChapterSelect();
+};
+window.resetAll=function(){
+  if(!confirm('确定要重置所有答题进度吗？'))return;
+  userAnswers={};multiSubmitted={};localWrongBook={};window._rand=null;
+  saveState();saveWrongBook();refresh();showToast('已重置');
+};
+window.toggleWrongPanel=function(){
+  var p=document.getElementById('wrongPanel');p.classList.toggle('open');
+  if(p.classList.contains('open'))renderWrongList();
+};
+function renderWrongList(){
+  var ids=Object.keys(localWrongBook), h='';
+  if(!ids.length){h='<div style="text-align:center;padding:60px;color:var(--faint)">暂无错题</div>';}
+  else for(var i=ids.length-1;i>=0;i--){
+    var w=localWrongBook[ids[i]];
+    h+='<div class="wrong-item" onclick="jumpTo('+w.qid+')">';
+    h+='<div class="wrong-q"><strong>#'+w.qid+'</strong> '+esc(w.stem).substring(0,60)+'...</div>';
+    h+='<div class="wrong-a">你的答案: <span style="color:var(--wrong)">'+esc(w.ua)+'</span></div>';
+    h+='<div class="wrong-a">正确: <span style="color:var(--correct)">'+esc(w.ca)+'</span></div>';
+    h+='</div>';
+  }
+  document.getElementById('wrongList').innerHTML=h;
+}
+window.jumpTo=function(qid){
+  toggleWrongPanel();var q=findQ(qid);
+  if(q&&q.chapter!==currentChapter)setChapter(q.chapter);
+  setTimeout(function(){var e=document.getElementById('qcard-'+qid);if(e)e.scrollIntoView({behavior:'smooth',block:'center'});},300);
+};
+function showToast(msg){
+  var c=document.getElementById('toastContainer'), d=document.createElement('div');
+  d.textContent=msg;
+  d.style.cssText='background:var(--accent);color:#fff;padding:10px 22px;border-radius:var(--radius);font-size:.8rem;font-weight:500;margin-bottom:6px;box-shadow:var(--shadow-lg);animation:fadeIn .2s';
+  c.appendChild(d);
+  setTimeout(function(){d.style.opacity='0';d.style.transition='opacity .25s';setTimeout(function(){d.remove();},300);},1800);
+}
+window.scrollToTop=function(){
+  var main=document.querySelector('.main');
+  if(main)main.scrollTo({top:0,behavior:'smooth'});
+};
+(function(){
+  var main=document.querySelector('.main');
+  var btn=document.getElementById('fabTop');
+  if(main&&btn){
+    main.addEventListener('scroll',function(){
+      if(main.scrollTop>400)btn.classList.add('visible');else btn.classList.remove('visible');
+    });
+  }
+})();
+
+function initQuiz() {
+  loadState();loadWrongBook();
+  renderSidebar();renderChapterSelect();renderAll();updateStats();
+}
+</script>
+</body>
+</html>
