@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>刷题网页</title>
 <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <style>
 :root{
   --bg:#faf9f7;--card:#fff;--border:#eae7e2;--text:#1a1a1a;--muted:#706e6a;
@@ -149,10 +150,10 @@ body{font-family:var(--font);background:var(--bg);color:var(--text);min-height:1
 <div class="upload-overlay" id="uploadOverlay">
   <div class="upload-box" id="uploadBox">
     <div class="icon">&#128196;</div>
-    <h2>上传 Word 文档开始刷题</h2>
-    <p>拖拽 .docx 文件到此处，或点击选择文件</p>
-    <p style="font-size:.73rem;color:var(--faint);margin-top:4px">支持标准题库格式：题号 + 题干 + 选项 + 答案</p>
-    <input type="file" id="fileInput" accept=".docx" onchange="handleFile(this.files[0])">
+    <h2>上传文档开始刷题</h2>
+    <p>拖拽 .docx / .pptx 文件到此处，或点击选择</p>
+    <p style="font-size:.73rem;color:var(--faint);margin-top:4px">支持 Word 题库、PPT 课件、问卷星导出等格式</p>
+    <input type="file" id="fileInput" accept=".docx,.pptx" onchange="handleFile(this.files[0])">
     <div class="upload-status" id="uploadStatus"></div>
   </div>
 </div>
@@ -521,6 +522,32 @@ function extractOptions(str) {
 }
 
 // --- File handler ---
+function processText(text) {
+  _rawText = text;
+  currentChapterName = '默认章节';
+  var parsed = parseQuestions(text);
+  var status = document.getElementById('uploadStatus');
+  if (parsed.length === 0) {
+    status.innerHTML = '未识别到题目。点击「调试」查看原始文本。';
+    status.className = 'upload-status error';
+    QUESTIONS = [];
+    return;
+  }
+  QUESTIONS = parsed;
+  var cmap = {};
+  for (var i = 0; i < parsed.length; i++) {
+    var ch = parsed[i].chapter; if (!cmap[ch]) cmap[ch] = 0; cmap[ch]++;
+  }
+  status.innerHTML = '识别到 ' + parsed.length + ' 道题，' + Object.keys(cmap).length + ' 个章节。';
+  status.className = 'upload-status success';
+  setTimeout(function() {
+    document.getElementById('uploadOverlay').style.display = 'none';
+    document.getElementById('quizLayout').style.display = 'flex';
+    document.getElementById('fabWrong').style.display = 'flex';
+    initQuiz();
+  }, 600);
+}
+
 function handleFile(file) {
   if (!file) return;
   var status = document.getElementById('uploadStatus');
@@ -528,39 +555,60 @@ function handleFile(file) {
   status.className = 'upload-status';
 
   var reader = new FileReader();
+  var ext = file.name.split('.').pop().toLowerCase();
+
   reader.onload = function(e) {
     var arrayBuffer = e.target.result;
-    mammoth.extractRawText({arrayBuffer: arrayBuffer})
-      .then(function(result) {
-        var text = result.value;
-        currentChapterName = '默认章节';
-        var parsed = parseQuestions(text);
 
-        if (parsed.length === 0) {
-          status.innerHTML = '未识别到题目，请检查文档格式。支持格式：题号. 题干 + A. 选项 + 答案：X';
+    if (ext === 'pptx') {
+      // Parse PPTX using JSZip
+      JSZip.loadAsync(arrayBuffer).then(function(zip) {
+        // Find all slide XML files
+        var slideFiles = Object.keys(zip.files).filter(function(f) {
+          return /^ppt\/slides\/slide\d+\.xml$/.test(f);
+        }).sort();
+        if (slideFiles.length === 0) {
+          status.innerHTML = 'PPT 中没有找到幻灯片内容';
           status.className = 'upload-status error';
           return;
         }
-
-        QUESTIONS = parsed;
-        status.innerHTML = '识别到 ' + parsed.length + ' 道题，' +
-          Object.keys(getChapterMap()).length + ' 个章节。正在进入刷题模式...';
-        status.className = 'upload-status success';
-
-        setTimeout(function() {
-          document.getElementById('uploadOverlay').style.display = 'none';
-          document.getElementById('quizLayout').style.display = 'flex';
-          document.getElementById('fabWrong').style.display = 'flex';
-          initQuiz();
-        }, 600);
-      })
-      .catch(function(err) {
-        status.innerHTML = '解析失败：' + err.message;
+        // Extract text from each slide
+        var promises = slideFiles.map(function(f) {
+          return zip.file(f).async('string');
+        });
+        return Promise.all(promises).then(function(slides) {
+          var allText = '';
+          for (var s = 0; s < slides.length; s++) {
+            // Extract text from <a:t> elements
+            var slideText = '';
+            var tRe = /<a:t[^>]*>([^<]*)<\/a:t>/g;
+            var tm;
+            while ((tm = tRe.exec(slides[s])) !== null) {
+              slideText += tm[1];
+            }
+            allText += '\n' + slideText + '\n';
+          }
+          return allText;
+        });
+      }).then(function(text) {
+        processText(text);
+      }).catch(function(err) {
+        status.innerHTML = 'PPT 解析失败：' + err.message;
         status.className = 'upload-status error';
       });
+    } else {
+      // DOCX via mammoth
+      mammoth.extractRawText({arrayBuffer: arrayBuffer})
+        .then(function(result) { processText(result.value); })
+        .catch(function(err) {
+          status.innerHTML = '解析失败：' + err.message;
+          status.className = 'upload-status error';
+        });
+    }
   };
   reader.readAsArrayBuffer(file);
 }
+
 
 function getChapterMap() {
   var map = {};
@@ -586,10 +634,11 @@ function getChapterMap() {
   box.addEventListener('drop', function(e) {
     e.preventDefault(); box.classList.remove('drag');
     var file = e.dataTransfer.files[0];
-    if (file && file.name.endsWith('.docx')) handleFile(file);
+    var ext = file.name.split('.').pop().toLowerCase();
+    if (ext === 'docx' || ext === 'pptx') handleFile(file);
     else {
       var st = document.getElementById('uploadStatus');
-      st.innerHTML = '请上传 .docx 格式的 Word 文档';
+      st.innerHTML = ext === 'ppt' ? '旧版 .ppt 不支持，请用 PowerPoint 另存为 .pptx 后再上传' : '请上传 .docx 或 .pptx 格式的文件';
       st.className = 'upload-status error';
     }
   });
@@ -890,64 +939,6 @@ function toggleDebug() {
 }
 
 window._rawText = _rawText;
-// Hook into handleFile to capture raw text
-var _origHandleFile = handleFile;
-handleFile = function(file) {
-  var origOnLoad = FileReader.prototype.onload;
-  var reader = new FileReader();
-  var _origReadAsArrayBuffer = reader.readAsArrayBuffer;
-  // Just wrap the mammoth call
-  _origHandleFile(file);
-  // We need to intercept mammoth result — let's just store it in the status callback
-};
-
-// Better approach: intercept in the mammoth promise chain
-var _origHandleFile2 = handleFile;
-handleFile = function(file) {
-  if (!file) return;
-  var status = document.getElementById('uploadStatus');
-  status.innerHTML = '<span class="spinner"></span>正在解析文档...';
-  status.className = 'upload-status';
-
-  var reader = new FileReader();
-  reader.onload = function(e) {
-    mammoth.extractRawText({arrayBuffer: e.target.result})
-      .then(function(result) {
-        _rawText = result.value;
-        currentChapterName = '默认章节';
-        var parsed = parseQuestions(result.value);
-
-        if (parsed.length === 0) {
-          status.innerHTML = '未识别到题目。点击「调试」查看原始文本，检查格式。';
-          status.className = 'upload-status error';
-          QUESTIONS = [];
-          return;
-        }
-
-        QUESTIONS = parsed;
-        var cmap = {};
-        for (var i = 0; i < parsed.length; i++) {
-          var ch = parsed[i].chapter;
-          if (!cmap[ch]) cmap[ch] = 0;
-          cmap[ch]++;
-        }
-        status.innerHTML = '识别到 ' + parsed.length + ' 道题，' + Object.keys(cmap).length + ' 个章节。';
-        status.className = 'upload-status success';
-
-        setTimeout(function() {
-          document.getElementById('uploadOverlay').style.display = 'none';
-          document.getElementById('quizLayout').style.display = 'flex';
-          document.getElementById('fabWrong').style.display = 'flex';
-          initQuiz();
-        }, 600);
-      })
-      .catch(function(err) {
-        status.innerHTML = '解析失败：' + err.message;
-        status.className = 'upload-status error';
-      });
-  };
-  reader.readAsArrayBuffer(file);
-};
 </script>
 </body>
 </html>
