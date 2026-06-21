@@ -229,9 +229,12 @@ function normalizeText(text) {
 function parseQuestions(text) {
   text = normalizeText(text);
 
-  // Detect format
+  // Detect format by looking for answer key patterns
   if (/第\s*\d+\s*题/.test(text) && /正确率/.test(text)) {
     return parseSurveyFormat(text);
+  }
+  if (/参考答案/.test(text) && /\d+\.[A-E]{1,5}/.test(text)) {
+    return parseAnswerKeyFormat(text);
   }
   return parseStandardFormat(text);
 }
@@ -390,6 +393,147 @@ function parseSurveyFormat(text) {
         options: options,
         answer: answer
       });
+    }
+  }
+
+  return questions;
+}
+
+// Format 3: Answer key at end of chapter (第X章参考答案 一、单项选择题 1.A 2.B)
+function parseAnswerKeyFormat(text) {
+  var questions = [];
+  var chapters = text.split(/(?:第[一二三四五六七八九十百\d]+章[^\n]*|参考答案)/);
+
+  // Better approach: find all (section header, questions, answer key) triplets
+  // Step 1: Find all chapter boundaries
+  var chapMatches = [];
+  var chapRe = /(第[一二三四五六七八九十百\d]+章[^\n]*)/g;
+  var cm;
+  while ((cm = chapRe.exec(text)) !== null) {
+    chapMatches.push({name: cm[1].trim(), idx: cm.index});
+  }
+
+  if (chapMatches.length === 0) {
+    // No chapters, treat whole document as one
+    chapMatches = [{name: '默认章节', idx: 0}];
+  }
+
+  for (var ci = 0; ci < chapMatches.length; ci++) {
+    var chapName = chapMatches[ci].name;
+    var chapStart = chapMatches[ci].idx;
+    var chapEnd = (ci + 1 < chapMatches.length) ? chapMatches[ci+1].idx : text.length;
+    var chapText = text.substring(chapStart, chapEnd);
+
+    // Find answer key in this chapter
+    var ansKeyMatch = chapText.match(/(?:第[一二三四五六七八九十百\d]+章)?\s*参考答案?\s*([\s\S]*)$/);
+    var answerKey = ansKeyMatch ? ansKeyMatch[1] : '';
+    var mainText = ansKeyMatch ? chapText.substring(0, chapText.indexOf(ansKeyMatch[0])) : chapText;
+
+    // Parse answer key: extract (type, answers) pairs
+    var answerMap = {}; // key: "single_0", "multi_0" → answer string
+    var ansSecRe = /([一二三四五六七八九十]+)、(\S+题)\s*([\d\.A-E\s]+)/g;
+    var as;
+    while ((as = ansSecRe.exec(answerKey)) !== null) {
+      var secType = as[2]; // 单项选择题 or 多项选择题
+      var ansStr = as[3];
+      // Parse "1.A 2.B 3.C" or "1.ABCD 2.ABCD"
+      var ansItems = ansStr.match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/g);
+      if (ansItems) {
+        for (var ai = 0; ai < ansItems.length; ai++) {
+          var item = ansItems[ai];
+          var im = item.match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/);
+          if (im) {
+            var prefix = secType.indexOf('单选') >= 0 ? 'single' : (secType.indexOf('多选') >= 0 ? 'multi' : 'unknown');
+            answerMap[prefix + '_' + im[1]] = im[2];
+          }
+        }
+      }
+    }
+
+    // Also try simpler pattern: "单项选择题 1.A 2.B ... 多项选择题 1.ABCD ..."
+    if (Object.keys(answerMap).length === 0) {
+      var singleSec = answerKey.match(/单[项选]*题[^多]*?([\d\.A-E\s]+)/);
+      var multiSec = answerKey.match(/多[项选]*题[^单参]*?([\d\.A-E\s]+)/);
+      [['single', singleSec], ['multi', multiSec]].forEach(function(pair) {
+        var prefix = pair[0], sec = pair[1];
+        if (sec) {
+          var items = sec[1].match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/g);
+          if (items) {
+            for (var ai = 0; ai < items.length; ai++) {
+              var im2 = items[ai].match(/(\d+)\s*[\.、]\s*([A-E]{1,5})/);
+              if (im2) answerMap[prefix + '_' + im2[1]] = im2[2];
+            }
+          }
+        }
+      });
+    }
+
+    // Parse questions from mainText
+    var secMatch = mainText.match(/([一二三四五六七八九十]+)、(\S+题)\s*([\s\S]*?)(?=[一二三四五六七八九十]+、\S+题|参考答案|第[一二三四五六七八九十百\d]+章|$)/g);
+    if (!secMatch) {
+      // No section headers found, try to parse all questions as single choice
+      secMatch = [mainText];
+    }
+
+    var secCounter = {single: 0, multi: 0};
+
+    for (var si = 0; si < secMatch.length; si++) {
+      var secText = secMatch[si];
+      // Determine section type
+      var secTypeHdr = secText.match(/[一二三四五六七八九十]+、(\S+题)/);
+      var isMulti = secTypeHdr && secTypeHdr[1].indexOf('多选') >= 0;
+      var prefix = isMulti ? 'multi' : 'single';
+
+      // Find all questions in this section
+      var qRe = /(\d+)\s*[、\.\)]\s*([\s\S]*?)(?=\d+\s*[、\.\)]|$)/g;
+      var qm;
+      var qInSec = [];
+      while ((qm = qRe.exec(secText)) !== null) {
+        var qNum = parseInt(qm[1]);
+        var qBody = qm[2].trim();
+        qInSec.push({num: qNum, body: qBody});
+      }
+
+      // Parse each question
+      for (var qi = 0; qi < qInSec.length; qi++) {
+        var qInfo = qInSec[qi];
+        var qBody = qInfo.body;
+
+        // Extract stem (before options)
+        var stem = qBody;
+        var options = extractOptions(qBody);
+
+        // Remove option text from stem
+        for (var k in options) {
+          stem = stem.replace(options[k], '');
+        }
+        stem = stem.replace(/[A-E][\.、\)．]/g, '');
+        stem = stem.replace(/（\s*[A-E]?\s*）/g, '（）').replace(/\(\s*[A-E]?\s*\)/g, '()');
+        stem = stem.replace(/\s+/g, ' ').trim();
+
+        // Get answer from answer key
+        var ansKey = prefix + '_' + qInfo.num;
+        var answer = answerMap[ansKey] || '';
+        if (!answer && !isMulti) {
+          // Try alternative key with section counter
+          answer = answerMap[prefix + '_' + (secCounter[prefix] + 1)] || '';
+        }
+        secCounter[prefix]++;
+
+        if (answer && /^[A-E]{2,}$/.test(answer)) answer = answer.split('');
+        var type = isMulti ? 'multi' : 'single';
+
+        if (stem && Object.keys(options).length >= 2 && answer) {
+          questions.push({
+            id: questions.length + 1,
+            type: type,
+            chapter: chapName,
+            stem: stem,
+            options: options,
+            answer: answer
+          });
+        }
+      }
     }
   }
 
